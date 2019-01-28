@@ -1,0 +1,5 @@
+IF moonViewAngle <= 90 OR moonViewAngle >= 270 THEN
+    arcRotationOffset = moonInnerRadius
+ELSEIF moonViewAngle > 90 AND moonViewAngle < 270 THEN
+    arcRotationOffset = moonInnerRadius * ABS(SIN(moonViewAngle))
+END
