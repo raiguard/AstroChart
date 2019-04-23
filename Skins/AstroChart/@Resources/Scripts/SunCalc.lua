@@ -2,13 +2,24 @@
     ----------------------------------------------------------------------------------------------------
     SUNCALC.LUA
     raiguard
-    v1.0.4
+    v2.0.1
 
     This script is a form of 'SunCalc' by mourner, translated to LUA and adapted for Rainmeter
     The original source code of SunCalc can be found at https://github.com/mourner/suncalc
     See below to view SunCalc's source code license
     ----------------------------------------------------------------------------------------------------
     CHANGELOG:
+    v2.0.1 - 2018-04-01
+        - Fixed faulty math.round function
+    v2.0.0 - 2018-02-15
+        - Enabled skin-side access to SunCalc's raw data tables
+        - Added timestamp exports
+        - Removed proprietary calculations and data table from the GenerateData() script
+        - Updated documentation
+    v1.0.5 - 2018-12-30
+        - Removed code from the Update() function to facilitate invoking the script multiple times
+          with different parameters through !CommandMeasure bangs
+        - Updated documentation
     v1.0.4 - 2018-11-21
         - Corrected timestamp conversion issues when monitoring a different timezone from the one the
           PC is located in
@@ -25,93 +36,88 @@
 ]]--
 
 debug = false -- set to true to enable debug logging
-data = { moonViewAngle = 0, moonPhase = 0, moonPhaseName = 'New Moon' } -- set default values
+data = {}
 
 function Initialize() end
 
--- on every update, retrieve inputs from the script measure and generate the data tables
--- if you are going to use the script through !CommandMeasures, delete the contents of this function
-function Update()
+function Update() end
 
-    GenerateData(SELF:GetOption('Timestamp'), SELF:GetOption('Latitude'), SELF:GetOption('Longitude'), SELF:GetOption('TzOffset'))
-
-end
-
--- this function does all of the actual work, so it can also be called through a !CommandMeasure bang if desired
+-- generates all of the data and translates it into a format usable by the skin.
+-- invoke through a !CommandMeasure bang.
+-- all time-related outputs are given as Windows FILETIME values.
+-- all angle-related outputs are given in radians.
 function GenerateData(timestamp, latitude, longitude, tzOffset)
 
     -- setup timestamps
     local timestamp, mDate, zDate, ysDate, tmDate = SetupTimestamps(timestamp, tzOffset)
+    -- RmLog('timestamp: ' .. timestamp)
+    -- RmLog('mDate: ' .. mDate .. ' zDate: ' .. zDate .. ' ysDate: ' .. ysDate .. ' tmDate: ' .. tmDate)
 
     -- retrieve data tables from SunCalc script
-    sunTimes = SunCalc.getTimes(mDate, latitude, longitude)
-    moonTimes = SunCalc.getMoonTimes(zDate, latitude, longitude)
-    sunPosition = SunCalc.getPosition(mDate, latitude, longitude)
-    moonPosition = SunCalc.getMoonPosition(mDate, latitude, longitude)
-    moonIllumination = SunCalc.getMoonIllumination(mDate, latitude, longitude)
-    -- debug logging
-    RmLog('getTimes():')
-    PrintTable(sunTimes)
-    RmLog('getMoonTimes():')
-    PrintTable(moonTimes)
-    RmLog('getPosition():')
-    PrintTable(sunPosition)
-    RmLog('getMoonPosition():')
-    PrintTable(moonPosition)
-    RmLog('getMoonIllumination():')
-    PrintTable(moonIllumination)
+    data.sunTimes = SunCalc.getTimes(mDate, latitude, longitude)
+    data.moonTimes = SunCalc.getMoonTimes(zDate, latitude, longitude)
+    data.sunPosition = SunCalc.getPosition(mDate, latitude, longitude)
+    data.moonPosition = SunCalc.getMoonPosition(mDate, latitude, longitude)
+    data.moonIllumination = SunCalc.getMoonIllumination(mDate, latitude, longitude)
 
     -- fix moonrise / moonset times if necessary
-    if moonTimes.rise ~= nil and (moonTimes.set == nil or moonTimes.set < moonTimes.rise and mDate > moonTimes.set) then
+    if data.moonTimes.rise ~= nil and (data.moonTimes.set == nil or data.moonTimes.set < data.moonTimes.rise and mDate > data.moonTimes.set) then
         -- set moonset to that of the next day
-        moonTimes.set = SunCalc.getMoonTimes(tmDate, latitude, longitude)['set']
-    elseif moonTimes.rise == nil or (moonTimes.set < moonTimes.rise and mDate < moonTimes.set) then
+        data.moonTimes.set = SunCalc.getMoonTimes(tmDate, latitude, longitude)['set']
+    elseif data.moonTimes.rise == nil or (data.moonTimes.set < data.moonTimes.rise and mDate < data.moonTimes.set) then
         -- set moonrise to that of the previous day
-        moonTimes.rise = SunCalc.getMoonTimes(ysDate, latitude, longitude)['rise']
+        data.moonTimes.rise = SunCalc.getMoonTimes(ysDate, latitude, longitude)['rise']
     end
-    -- calculate suntime and moontime in minutes
-    suntime = GetDifference(sunTimes.sunset, sunTimes.sunrise)
-    moontime = GetDifference(moonTimes.set, moonTimes.rise)
 
-    -- translate the data into the formats used by the skin
-    data.sunrise = UnixToFiletime(CorrectTimestamp(sunTimes.sunrise), tzOffset)
-    data.sunset = UnixToFiletime(CorrectTimestamp(sunTimes.sunset), tzOffset)
-    data.moonrise = UnixToFiletime(CorrectTimestamp(moonTimes.rise), tzOffset)
-    data.moonset = UnixToFiletime(CorrectTimestamp(moonTimes.set), tzOffset)
-    data.moonViewAngle = math.deg(moonIllumination.angle - moonPosition.parallacticAngle)
-    data.moonPhase = moonIllumination.phase
-    data.moonPhaseName = GetMoonPhaseName(data.moonPhase)
-    
-    -- calculate sun and moon dial angles
-    data.sunDialAngle = (GetDifference(mDate, sunTimes.sunrise) / suntime) * 180
-    data.moonDialAngle = (GetDifference(mDate, moonTimes.rise) / moontime) * 180
-    -- brute-force reset angle to -1 if things get wacky or if the object is set
-    if data.sunDialAngle > 180 or data.sunDialAngle < 0 then data.sunDialAngle = -1 end
-    if data.moonDialAngle > 180 or data.moonDialAngle < 0 then data.moonDialAngle = -1 end
+    -- convert timestamps back to FILETIME
+    data.sunTimes = ConvertTime(data.sunTimes, 'Windows', true, tzOffset)
+    data.moonTimes = ConvertTime(data.moonTimes, 'Windows', true, tzOffset)
+    data.timestamps = ConvertTime({ timestamp = timestamp, mDate = mDate, zDate = zDate, ysDate = ysDate, tmDate = tmDate }, 'Windows', true, tzOffset)
+    -- data.timestamps.timestamp = ConvertTime(timestamp
+
+    -- add moon phase name info
+    data.moonIllumination.phaseName = GetMoonPhaseName(data.moonIllumination.phase)
+
     -- debug logging
-    RmLog('data:')
-    PrintTable(data)
+    RmLog('data = {')
+    RmLog(data)
+    RmLog('}')
+
+    SKIN:Bang('!EnableMeasureGroup', 'SunCalc')
     SKIN:Bang('!UpdateMeasureGroup', 'SunCalc')
     SKIN:Bang('!UpdateMeterGroup', 'SunCalc')
     SKIN:Bang('!Redraw')
 
 end
 
--- converts a Windows FILETIME timestamp into a Unix epoch timestamp, accounting for timezone and DST, then returns several useful timestamps
-function SetupTimestamps(timestamp, tzOffset)
+-- retrieves data from the data table using inline LUA in the skin
+function GetData(key, value) return data[key] and data[key][value] or 0 end
 
-    tzOffset = tzOffset or 0
+-- same as GetData(), but allows one to perform another SunCalc operation
+function GetScData(functionName, key, timestamp, latitude, longitude, tzOffset)
+
+    if timestamp > 0 then timestamp, mDate = SetupTimestamps(timestamp, tzOffset) else return 0 end
+    return SunCalc[functionName](mDate, latitude, longitude, tzOffset)[key]
+
+end
+
+-- ----- Utilities -----
+
+-- sets up and returns several useful timestamps
+function SetupTimestamps(timestamp)
+
     local localTz = (GetTimeOffset() / 3600)
-    RmLog(localTz .. ' | ' .. tzOffset)
+    -- convert Windows timestamp (0 = 1/1/1601) to Unix/Lua timestamp (0 = 1/1/1970)
+    timestamp = ConvertTime(timestamp, 'Unix', false, localTz * -1)
     tDate = os.date("!*t", timestamp)
-    tDate.year = tDate.year - (1970 - 1601)
-    timestamp = os.time(tDate) - (os.date('*t')['isdst'] and 3600 or 0)
-    RmLog(timestamp)
+    RmLog('tdate = {')
+    RmLog(tDate)
+    RmLog('}')
     mDate = tonumber(tostring(timestamp) .. '000')   
     zDate = tonumber(tostring(os.time{ year = tDate.year, month = tDate.month, day = tDate.day, hour = 0, min = 0, sec = 0 }) .. '000')
     ysDate = zDate - 86400000  
     tmDate =  zDate + 86400000
-    RmLog('zDate: ' .. zDate)
+    -- RmLog('mDate: ' .. mDate .. ' zDate: ' .. zDate .. ' ysDate: ' .. ysDate .. ' tmDate: ' .. tmDate)
 
     return timestamp, -- current unix epoch timestamp value
            mDate,     -- 'millisecond date' (timestamp with three extra zeroes)
@@ -121,10 +127,26 @@ function SetupTimestamps(timestamp, tzOffset)
 
 end
 
--- retrieves data from the data table using inline LUA in the skin
-function GetData(key) return data[key] or '' end
+-- converts between windows and unix epoch timestamps, with an optional timezone offset
+function ConvertTime(n, to, mode, tzOffset)
 
--- ----- Utilities -----
+    if tzOffset == nil then tzOffset = 0 end
+
+	local Formats = {
+		Unix    = -1,
+		Windows = 1
+    }
+
+    if type(n) == 'table' then
+        for k,t in pairs(n) do
+            n[k] = ConvertTime(t, to, mode, tzOffset)
+        end
+        return n
+    end
+    
+    return Formats[to] and (mode and tonumber(tostring(n):sub(1,10)) or n) + (11644473600 * Formats[to]) + (tzOffset * 3600) or nil
+
+end
 
 moonPhases = {
     { 0.00, 0.03, 'New Moon'        },
@@ -148,50 +170,33 @@ function GetMoonPhaseName(phase)
 
 end
 
-function UnixToFiletime(timestamp, tzOffset)
-
-    local tDate = os.date("*t", timestamp)
-    tDate.year = tDate.year + (1970 - 1601)
-    tDate.hour = tDate.hour + tzOffset
-    timestamp = os.time(tDate)
-    return timestamp
-
-end
-
 function GetTimeOffset() return (os.time() - os.time(os.date('!*t')) + (os.date('*t')['isdst'] and 3600 or 0)) end
 
-function GetDifference(a1, a2) return ((a1 - a2) / 60000) end
+-- writes the given string or table to the rainmeter log
+function RmLog(...)
 
-function CorrectTimestamp(timestamp) return tostring(timestamp):sub(1,10) end
-
--- function to make logging messages less cluttered
-function RmLog(message, type)
-
-    if type == nil then type = 'Debug' end
+    if debug == nil then debug = false end
+    if category == nil then category = 'Debug' end
+    if category == 'Debug' and debug == false then return end
+    if printIndent == nil then printIndent = '' end
       
-    if debug == true then
-        SKIN:Bang("!Log", message, type)
-    elseif type ~= 'Debug' then
-        SKIN:Bang("!Log", message, type)
-    end
-      
-end
-
-printIndent = '     '
-
--- prints the entire contents of a table to the Rainmeter log
-function PrintTable(table)
-    for k,v in pairs(table) do
-        if type(v) == 'table' then
-            local pI = printIndent
-            RmLog(printIndent .. tostring(k) .. ':')
-            printIndent = printIndent .. '  '
-            PrintTable(v)
-            printIndent = pI
-        else
-            RmLog(printIndent .. tostring(k) .. ': ' .. tostring(v))
+    if type(message) == 'table' then
+        for k,v in pairs(message) do
+            if type(v) == 'table' then
+                local pI = printIndent
+                RmLog(printIndent .. tostring(k) .. ' = {', category)
+                printIndent = printIndent .. '    '
+                RmLog(v, category)
+                printIndent = pI
+                RmLog(printIndent .. '}', category)
+            else
+                RmLog(printIndent .. tostring(k) .. ' = ' .. tostring(v), category)
+            end
         end
+    else
+        SKIN:Bang("!Log", message, category)
     end
+      
 end
 
 -- ------------------------------------------------------------------------------------------------------------------------
@@ -322,12 +327,14 @@ end
 -- sun times configuration (angle, morning name, evening name)
 
 times = {
-    {-0.833, 'sunrise',       'sunset'      },
-    {  -0.3, 'sunriseEnd',    'sunsetStart' },
-    {    -6, 'dawn',          'dusk'        },
-    {   -12, 'nauticalDawn',  'nauticalDusk'},
-    {   -18, 'nightEnd',      'night'       },
-    {     6, 'goldenHourEnd', 'goldenHour'  }
+    {-0.833, 'sunrise',         'sunset'          },
+    {  -0.3, 'sunriseEnd',      'sunsetStart'     },
+    {    -6, 'dawn',            'dusk'            },
+    {   -12, 'nauticalDawn',    'nauticalDusk'    },
+    {   -18, 'nightEnd',        'night'           },
+    {     6, 'goldenHourEnd',   'goldenHour'      },
+    {    -4, 'blueHourDawnEnd', 'blueHourDusk'    },
+    {    -8, 'blueHourDawn',    'blueHourDuskEnd' }
 }
 
 -- adds a custom time to the times config
@@ -528,12 +535,10 @@ end
 
 -- ---------- NOT PART OF THE ORIGINAL SCRIPT - HAD TO BE ADDED FOR THE SCRIPT TO WORK IN LUA ----------
 
-function math.round(x)
-    if x%2 ~= 0.5 then
-        return math.floor(x+0.5)
-    end
-    return x-0.5
-end
+function math.round(num, numDecimalPlaces)
+    local mult = 10^(numDecimalPlaces or 0)
+    return math.floor(num * mult + 0.5) / mult
+  end
 
 function table.length(T)
     local count = 0
