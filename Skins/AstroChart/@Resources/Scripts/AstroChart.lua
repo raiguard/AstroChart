@@ -36,6 +36,9 @@ function GenerateData(timestamp, latitude, longitude, tzOffset)
         data.moonTimes.rise = SunCalc.getMoonTimes(ysDate, latitude, longitude)['rise']
     end
 
+    -- generate paths
+    GeneratePaths(mDate, latitude, longitude)
+
     -- convert timestamps back to FILETIME
     data.sunTimes = ConvertTime(data.sunTimes, 'Windows', true, tzOffset)
     data.moonTimes = ConvertTime(data.moonTimes, 'Windows', true, tzOffset)
@@ -47,9 +50,6 @@ function GenerateData(timestamp, latitude, longitude, tzOffset)
 
     -- debug logging
     RmLog(data, 'data')
-
-    -- generate paths
-    GeneratePaths(mDate, latitude, longitude)
 
     SKIN:Bang('!EnableMeasureGroup', 'SunCalc')
     SKIN:Bang('!UpdateMeasureGroup', 'SunCalc')
@@ -63,28 +63,44 @@ function GeneratePaths(mDate, lat, long)
     local meter = SELF:GetOption('PathMeter')
     local chart_width = SELF:GetOption('ChartWidth')
     local chart_height = SELF:GetOption('ChartHeight')
-    local time_start = mDate - (12 * 60 * 60 * 1000)
-    local time_div = (24 * 60 * 60 * 1000) / chart_width
+    local chart_time = SELF:GetOption('ChartTime')
+    local time_start = mDate - ((chart_time / 2) * 60 * 60 * 1000)
+    local time_end = mDate + ((chart_time / 2) * 60 * 60 * 1000)
+    local time_div = (chart_time * 60 * 60 * 1000) / chart_width
 
     RmLog({ mDate, meter, chart_width, chart_height, time_start, time_div }, 'pathMeterInfo')
 
     local sun_points = {}
     local moon_points = {}
 
+    local x = os.clock()
+
     for i=1,chart_width do
         sun_points[i] = i .. ',' .. ((chart_height / 2) - (SunCalc.getPosition(time_start + (time_div * (i - 1)), lat, long).altitude / (math.pi / 2)) * (chart_height / 2))
         moon_points[i] = i .. ',' .. ((chart_height / 2) - (SunCalc.getMoonPosition(time_start + (time_div * (i - 1)), lat, long).altitude / (math.pi / 2)) * (chart_height / 2))
     end
 
-    SKIN:Bang('!SetOption', meter, 'SunPath', '0,(#chartHeight# / 2) | LineTo ' .. table.concat(sun_points, ' | LineTo ') .. '| LineTo #chartWidth#,(#chartHeight# / 2) | ClosePath 1')
-    SKIN:Bang('!SetOption', meter, 'MoonPath', '0,(#chartHeight# / 2) | LineTo ' .. table.concat(moon_points, ' | LineTo ') .. '| LineTo #chartWidth#,(#chartHeight# / 2) | ClosePath 1')
+    SKIN:Bang('!SetOption', meter, 'SunPath', '1,(#chartHeight# / 2) | LineTo ' .. table.concat(sun_points, ' | LineTo ') .. '| LineTo #chartWidth#,(#chartHeight# / 2) | ClosePath 1')
+    SKIN:Bang('!SetOption', meter, 'MoonPath', '1,(#chartHeight# / 2) | LineTo ' .. table.concat(moon_points, ' | LineTo ') .. '| LineTo #chartWidth#,(#chartHeight# / 2) | ClosePath 1')
 
-    RmLog(sun_points, 'sun_points')
+    RmLog(data.sunTimes.sunset)
+    RmLog(time_end)
+
+    data.path_fractions = {}
+    data.path_fractions.sunrise = (data.sunTimes.sunrise - time_start) / (time_end - time_start)
+    data.path_fractions.sunset = (data.sunTimes.sunset - time_start) / (time_end - time_start)
+    data.path_fractions.moonrise = (data.moonTimes.rise - time_start) / (time_end - time_start)
+    data.path_fractions.moonset = (data.moonTimes.set - time_start) / (time_end - time_start)
+
+    -- RmLog(sun_points, 'sun_points')
+    -- RmLog(moon_points, 'moon_points')
+
+    -- RmLog(string.format("elapsed time: %.2f\n", os.clock() - x), 'Notice')
 
 end
 
 -- ------------------------------
--- UTILITIES
+-- SUNCALC UTILITIES
 
 -- retrieves data from the data table using inline LUA in the skin
 function GetData(key, value) return data[key] and data[key][value] or 0 end
